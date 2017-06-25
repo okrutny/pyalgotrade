@@ -13,3 +13,4 @@ build
 PyAlgoTrade.egg-info
 
 testcases/twitter_credentials.py
+/pyalgotrade/kraken/demo/
