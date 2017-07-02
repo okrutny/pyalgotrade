@@ -18,11 +18,12 @@
 .. moduleauthor:: Gabriel Martin Becedillas Ruiz <gabriel.becedillas@gmail.com>
 """
 
-import pyalgotrade
+import pyalgotrade.logger
 from pyalgotrade import broker
 
 logger = pyalgotrade.logger.getLogger("kraken")
 btc_symbol = "XXBT"
+traded_pair = "XXBTZEUR"
 
 
 class BTCTraits(broker.InstrumentTraits):

@@ -22,7 +22,8 @@ import Queue
 import datetime
 import time
 
-from pyalgotrade.bitstamp import wsclient
+from kraken import httpclient
+from pyalgotrade.kraken import client
 
 from pyalgotrade import barfeed
 from pyalgotrade import observer
@@ -121,11 +122,15 @@ class LiveTradeFeed(barfeed.BaseBarFeed):
         self.__orderBookUpdateEvent = observer.Event()
 
     # Factory method for testing purposes.
-    def buildWebSocketClientThread(self):
-        return wsclient.WebSocketClientThread()
+    def buildExchangeMonitorClientThread(self):
+        return client.ExchangeMonitor(self.buildHTTPClient())
+
+    # Factory method for testing purposes.
+    def buildHTTPClient(self):
+        return httpclient.HTTPClient()
 
     def getCurrentDateTime(self):
-        return wsclient.get_current_datetime()
+        return client.get_current_datetime()
 
     def enableReconection(self, enableReconnection):
         self.__enableReconnection = enableReconnection
@@ -136,35 +141,18 @@ class LiveTradeFeed(barfeed.BaseBarFeed):
 
         try:
             # Start the thread that runs the client.
-            self.__thread = self.buildWebSocketClientThread()
+            self.__thread = self.buildExchangeMonitorClientThread()
             self.__thread.start()
+            self.__initializationOk = True
         except Exception, e:
             self.__initializationOk = False
             common.logger.error("Error connecting : %s" % str(e))
-
-        # Wait for initialization to complete.
-        while self.__initializationOk is None and self.__thread.is_alive():
-            self.__dispatchImpl([wsclient.WebSocketClient.ON_CONNECTED])
 
         if self.__initializationOk:
             common.logger.info("Initialization ok.")
         else:
             common.logger.error("Initialization failed.")
         return self.__initializationOk
-
-    def __onConnected(self):
-        self.__initializationOk = True
-
-    def __onDisconnected(self):
-        if self.__enableReconnection:
-            initialized = False
-            while not self.__stopped and not initialized:
-                common.logger.info("Reconnecting")
-                initialized = self.__initializeClient()
-                if not initialized:
-                    time.sleep(5)
-        else:
-            self.__stopped = True
 
     def __dispatchImpl(self, eventFilter):
         ret = False
@@ -174,14 +162,10 @@ class LiveTradeFeed(barfeed.BaseBarFeed):
                 return False
 
             ret = True
-            if eventType == wsclient.WebSocketClient.ON_TRADE:
+            if eventType == client.ExchangeMonitor.ON_TRADE:
                 self.__onTrade(eventData)
-            elif eventType == wsclient.WebSocketClient.ON_ORDER_BOOK_UPDATE:
+            elif eventType == client.ExchangeMonitor.ON_ORDER_BOOK_UPDATE:
                 self.__orderBookUpdateEvent.emit(eventData)
-            elif eventType == wsclient.WebSocketClient.ON_CONNECTED:
-                self.__onConnected()
-            elif eventType == wsclient.WebSocketClient.ON_DISCONNECTED:
-                self.__onDisconnected()
             else:
                 ret = False
                 common.logger.error("Invalid event received to dispatch: %s - %s" % (eventType, eventData))

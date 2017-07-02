@@ -56,7 +56,7 @@ class TradeMonitor(threading.Thread):
         self.__stop = False
 
     def _getNewTrades(self):
-        userTrades = self.__httpClient.getUserTransactions(httpclient.HTTPClient.UserTransactionType.MARKET_TRADE)
+        userTrades = self.__httpClient.getUserTransactions()
 
         # Get the new trades only.
         ret = []
