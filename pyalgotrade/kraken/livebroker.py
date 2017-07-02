@@ -43,7 +43,7 @@ def build_order_from_open_order(openOrder, instrumentTraits):
 
 
 class TradeMonitor(threading.Thread):
-    POLL_FREQUENCY = 2
+    POLL_FREQUENCY = 10
 
     # Events
     ON_USER_TRADE = 1
@@ -61,7 +61,7 @@ class TradeMonitor(threading.Thread):
         # Get the new trades only.
         ret = []
         for userTrade in userTrades:
-            if userTrade.getId() > self.__lastTradeId:
+            if userTrade.getOrderingPropertyValue() > self.__lastTradeId:
                 ret.append(userTrade)
             else:
                 break
@@ -76,7 +76,7 @@ class TradeMonitor(threading.Thread):
         trades = self._getNewTrades()
         # Store the last trade id since we'll start processing new ones only.
         if len(trades):
-            self.__lastTradeId = trades[-1].getId()
+            self.__lastTradeId = trades[-1].getOrderingPropertyValue()
             common.logger.info("Last trade found: %d" % (self.__lastTradeId))
 
         super(TradeMonitor, self).start()
@@ -157,8 +157,8 @@ class LiveBroker(broker.Broker):
         balance = self.__httpClient.getAccountBalance()
 
         # Cash
-        self.__cash = round(balance.getUSDAvailable(), 2)
-        common.logger.info("%s USD" % (self.__cash))
+        self.__cash = round(balance.getEURAvailable(), 2)
+        common.logger.info("%s EUR" % (self.__cash))
         # BTC
         btc = balance.getBTCAvailable()
         if btc:
@@ -190,7 +190,7 @@ class LiveBroker(broker.Broker):
             order = self.__activeOrders.get(trade.getOrderId())
             if order is not None:
                 fee = trade.getFee()
-                fillPrice = trade.getBTCUSD()
+                fillPrice = trade.getFillPrice()
                 btcAmount = trade.getBTC()
                 dateTime = trade.getDateTime()
 

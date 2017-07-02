@@ -36,11 +36,11 @@ from pyalgotrade.utils import dt
 logging.getLogger("requests").setLevel(logging.ERROR)
 
 
-def parse_datetime(dateTime):
+def parse_datetime(timestamp):
     try:
-        ret = datetime.datetime.strptime(dateTime, "%Y-%m-%d %H:%M:%S")
+        ret = datetime.datetime.fromtimestamp(timestamp)
     except ValueError:
-        ret = datetime.datetime.strptime(dateTime, "%Y-%m-%d %H:%M:%S.%f")
+        ret = None
     return dt.as_utc(ret)
 
 
@@ -51,12 +51,21 @@ class AccountBalance(object):
     def getDict(self):
         return self.__jsonDict
 
-    # TODO: remove mocking
-    def getUSDAvailable(self):
-        return 3000.0 #float(self.__jsonDict["usd_available"])
+    def getEURAvailable(self):
+        result = self.__jsonDict["result"]
+        if result:
+            try:
+                return float(result["ZEUR"])
+            except KeyError:
+                return None
 
     def getBTCAvailable(self):
-        return 1.5 #float(self.__jsonDict["btc_available"])
+        result = self.__jsonDict["result"]
+        if result:
+            try:
+                return float(result[common.btc_symbol])
+            except KeyError:
+                return None
 
 
 class Order(object):
@@ -67,13 +76,13 @@ class Order(object):
         return self.__jsonDict
 
     def getId(self):
-        return int(self.__jsonDict["id"])
+        return self.__jsonDict["id"]
 
     def isBuy(self):
-        return self.__jsonDict["type"] == 0
+        return self.__jsonDict["type"] == "buy"
 
     def isSell(self):
-        return self.__jsonDict["type"] == 1
+        return self.__jsonDict["type"] == "sell"
 
     def getPrice(self):
         return float(self.__jsonDict["price"])
@@ -93,13 +102,13 @@ class UserTransaction(object):
         return self.__jsonDict
 
     def getBTC(self):
-        return float(self.__jsonDict["btc"])
+        return float(self.__jsonDict["vol"])
 
-    def getBTCUSD(self):
-        return float(self.__jsonDict["btc_usd"])
+    def getFillPrice(self):
+        return float(self.__jsonDict["price"])
 
     def getDateTime(self):
-        return parse_datetime(self.__jsonDict["datetime"])
+        return parse_datetime(self.__jsonDict["time"])
 
     def getFee(self):
         return float(self.__jsonDict["fee"])
@@ -108,10 +117,13 @@ class UserTransaction(object):
         return int(self.__jsonDict["id"])
 
     def getOrderId(self):
-        return int(self.__jsonDict["order_id"])
+        return int(self.__jsonDict["ordertxid"])
 
     def getUSD(self):
-        return float(self.__jsonDict["usd"])
+        return float(self.__jsonDict["cost"])
+
+    def getOrderingPropertyValue(self):
+        return float(self.__jsonDict["time"])
 
 
 class HTTPClient(object):
@@ -186,7 +198,7 @@ class HTTPClient(object):
         with self.__lock:
             data, headers = self._buildQuery(urlpath, params)
 
-            response = requests.post(self.uri+urlpath, headers=headers, data=data, timeout=HTTPClient.REQUEST_TIMEOUT)
+            response = requests.post(self.uri + urlpath, headers=headers, data=data, timeout=HTTPClient.REQUEST_TIMEOUT)
             response.raise_for_status()
 
         jsonResponse = response.json()
@@ -208,17 +220,56 @@ class HTTPClient(object):
     def getAccountBalance(self):
         endpoint = 'Balance'
         url = self._get_private_api_urlpath(endpoint)
-        # TODO: parse response properly
-        # jsonResponse = self._post(url, {})
-        #return AccountBalance(jsonResponse)
-        return AccountBalance({})
+        jsonResponse = self._post(url, {})
+        return AccountBalance(jsonResponse)
 
     def getOpenOrders(self):
-        # url = "https://www.bitstamp.net/api/open_orders/"
-        # jsonResponse = self._post(url, {})
-        # return [Order(json_open_order) for json_open_order in jsonResponse]
-        # TODO implement this
-        return []
+        endpoint = 'OpenOrders'
+        url = self._get_private_api_urlpath(endpoint)
+        jsonResponse = self._post(url, {})
+        result = jsonResponse.get("result")
+        orders = None
+        if jsonResponse and result and result.get("open"):
+            orders = []
+            for oid, o_details in result.get('open').iteritems():
+                o_dict = {}
+                o_dict["id"] = oid
+                o_dict["type"] = o_details["descr"]["type"]
+                o_dict["price"] = o_details["descr"]["price"]  # limit price
+                o_dict["amount"] = o_details["vol"]
+                o_dict["datetime"] = o_details["opentm"]
+                orders.append(Order(o_dict))
+        return orders
+# sample output
+# {u'result':
+#      {u'open':
+#           {u'OVRXBV-YRC5W-PKCC4N':
+#                {u'status': u'open',
+#                 u'fee': u'0.00000',
+#                 u'expiretm': 0,
+#                 u'descr':
+#                     {u'leverage': u'none',
+#                      u'ordertype': u'limit',
+#                      u'price': u'2200.500',
+#                      u'pair': u'XBTEUR',
+#                      u'price2': u'0',
+#                      u'type': u'buy',
+#                      u'order': u'buy 0.00050000 XBTEUR @ limit 2200.500'
+#                      },
+#                 u'vol': u'0.00050000',
+#                 u'cost': u'0.00000',
+#                 u'misc': u'',
+#                 u'price': u'0.00000',
+#                 u'starttm': 0,
+#                 u'userref': None,
+#                 u'vol_exec': u'0.00000000',
+#                 u'oflags': u'fciq',
+#                 u'refid': None,
+#                 u'opentm': 1498685688.616}
+#            }
+#       },
+#  u'error': []}
+
 
     def cancelOrder(self, orderId):
         url = "https://www.bitstamp.net/api/cancel_order/"
@@ -226,6 +277,7 @@ class HTTPClient(object):
         jsonResponse = self._post(url, params)
         if jsonResponse != True:
             raise Exception("Failed to cancel order")
+
 
     def buyLimit(self, limitPrice, quantity):
         url = "https://www.bitstamp.net/api/buy/"
@@ -237,12 +289,10 @@ class HTTPClient(object):
         # error.
         amount = round(quantity, 8)
 
-        params = {
-            "price": price,
-            "amount": amount
-        }
+        params = {"price": price, "amount": amount}
         jsonResponse = self._post(url, params)
         return Order(jsonResponse)
+
 
     def sellLimit(self, limitPrice, quantity):
         url = "https://www.bitstamp.net/api/sell/"
@@ -254,22 +304,30 @@ class HTTPClient(object):
         # error.
         amount = round(quantity, 8)
 
-        params = {
-            "price": price,
-            "amount": amount
-        }
+        params = {"price": price, "amount": amount}
         jsonResponse = self._post(url, params)
         return Order(jsonResponse)
 
+    def getOrdersInfo(self, txidsArr):
+        endpoint = "QueryOrders"
+        url = self._get_private_api_urlpath(endpoint)
+        jsonResponse = self._post(url, {'txid': ",".join(txidsArr)})
+        result = jsonResponse.get("result")
+        return result
+
     def getUserTransactions(self, transactionType=None):
-        # url = "https://www.bitstamp.net/api/user_transactions/"
-        # jsonResponse = self._post(url, {})
-        # if transactionType is not None:
-        #     jsonUserTransactions = filter(
-        #         lambda jsonUserTransaction: jsonUserTransaction["type"] == transactionType, jsonResponse
-        #     )
-        # else:
-        #     jsonUserTransactions = jsonResponse
-        # return [UserTransaction(jsonUserTransaction) for jsonUserTransaction in jsonUserTransactions]
-        # TODO: implement this
-        return []
+        endpoint = "TradesHistory"
+        url = self._get_private_api_urlpath(endpoint)
+        jsonResponse = self._post(url, {})
+        result = jsonResponse.get("result")
+
+        # order_tx_ids = []
+        # for trade_info in result['trades'].itervalues():
+        #     order_tx_ids.append(trade_info['ordertxid'])
+        #
+        # orders_info = self.getOrdersInfo(order_tx_ids)
+        user_transactions = []
+        for txid, trade_info in result['trades'].iteritems():
+            trade_info.update(id=txid)
+            user_transactions.append(UserTransaction(trade_info))
+        return user_transactions

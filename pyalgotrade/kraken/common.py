@@ -22,7 +22,7 @@ import pyalgotrade
 from pyalgotrade import broker
 
 logger = pyalgotrade.logger.getLogger("kraken")
-btc_symbol = "XBT"
+btc_symbol = "XXBT"
 
 
 class BTCTraits(broker.InstrumentTraits):
