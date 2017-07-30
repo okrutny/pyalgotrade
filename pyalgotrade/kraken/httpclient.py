@@ -30,15 +30,14 @@ import urllib
 from time import sleep
 
 import requests
-from requests.exceptions import HTTPError
+from requests.exceptions import HTTPError, ReadTimeout
 
+from krakenex import connection
 from pyalgotrade.kraken import common
 from pyalgotrade.utils import dt
 
 logger = logging.getLogger("httpclient")
 logger.setLevel(logging.INFO)
-
-
 
 
 def parse_datetime(timestamp):
@@ -47,6 +46,10 @@ def parse_datetime(timestamp):
     except ValueError:
         ret = None
     return dt.as_utc(ret)
+
+
+def get_current_datetime():
+    return datetime.datetime.now()
 
 
 class AccountBalance(object):
@@ -119,10 +122,11 @@ class UserTransaction(object):
         return float(self.__jsonDict["fee"])
 
     def getId(self):
-        return int(self.__jsonDict["id"])
+        # TODO: fixme ids (strings can't be converted to int)
+        return self.__jsonDict["id"]
 
     def getOrderId(self):
-        return int(self.__jsonDict["ordertxid"])
+        return self.__jsonDict["ordertxid"]
 
     # TODO: it's EUR, need to be "base currency agnostic"
     def getUSD(self):
@@ -169,8 +173,12 @@ class Trade(object):
 class OrderBookUpdate(object):
     """An order book update event."""
 
-    def __init__(self, jsonDict):
-        self.__jsonDict = jsonDict
+    def __init__(self, dateTime, bidPrices, bidVols, askPrices, askVols):
+        self.__dateTime = dateTime
+        self.__bidPrices = bidPrices
+        self.__bidVols = bidVols
+        self.__askPrices = askPrices
+        self.__askVols = askVols
 
     def getDateTime(self):
         """Returns the :class:`datetime.datetime` when this event was received."""
@@ -178,24 +186,24 @@ class OrderBookUpdate(object):
 
     def getBidPrices(self):
         """Returns a list with the top 20 bid prices."""
-        return [float(bid[0]) for bid in self.getData()["bids"]]
+        return self.__bidPrices
 
     def getBidVolumes(self):
         """Returns a list with the top 20 bid volumes."""
-        return [float(bid[1]) for bid in self.getData()["bids"]]
+        return self.__bidVols
 
     def getAskPrices(self):
         """Returns a list with the top 20 ask prices."""
-        return [float(ask[0]) for ask in self.getData()["asks"]]
+        return self.__askPrices
 
     def getAskVolumes(self):
         """Returns a list with the top 20 ask volumes."""
-        return [float(ask[1]) for ask in self.getData()["asks"]]
+        return self.__askVols
 
 
 class HTTPClient(object):
     USER_AGENT = "PyAlgoTrade"
-    REQUEST_TIMEOUT = 30
+    REQUEST_TIMEOUT = 45
 
     class UserTransactionType:
         MARKET_TRADE = 2
@@ -234,10 +242,11 @@ class HTTPClient(object):
         self.__prevNonce = ret
         return ret
 
-    def _buildQuery(self, urlpath, params):
+    def _buildQuery(self, urlpath, params, nonce=None):
 
         # set nonce
-        nonce = self._getNonce()
+        if not nonce:
+            nonce = self._getNonce()
         params["nonce"] = nonce
 
         # create signature
@@ -247,7 +256,7 @@ class HTTPClient(object):
 
         # Headers
         headers = {}
-        headers["User-Agent"] = HTTPClient.USER_AGENT
+        #headers["User-Agent"] = HTTPClient.USER_AGENT
         headers["API-Key"] = self.__key
         headers["API-Sign"] = base64.b64encode(signature.digest())
 
@@ -257,23 +266,40 @@ class HTTPClient(object):
 
         return (data, headers)
 
-    def _post(self, urlpath, params):
+    def _post(self, urlpath, params, nonce=None):
         common.logger.debug("POST to %s with params %s" % (urlpath, str(params)))
+
+        jsonResponse = response = None
 
         # Serialize access to nonce generation and http requests to avoid
         # sending them in the wrong order.
         with self.__lock:
-            data, headers = self._buildQuery(urlpath, params)
+            data, headers = self._buildQuery(urlpath, params, nonce)
 
-            response = requests.post(self.uri + urlpath, headers=headers, data=data, timeout=HTTPClient.REQUEST_TIMEOUT)
+            try:
+                if not nonce:
+                    conn = connection.Connection()
+                    response = conn._request(self.uri + urlpath, data, headers)
+                    #response = requests.post(self.uri + urlpath, headers=headers, data=data, timeout=HTTPClient.REQUEST_TIMEOUT)
+                # else:
+                #     return self.uri + urlpath, data, headers
+                print response
+            except ReadTimeout:
+                logger.info("timeout")
+
+        if response:
             try:
                 response.raise_for_status()
             except HTTPError, e:
                 if e.response.status_code == 504:
-                    logger.error("504, skipping")
+                    logger.info("504, skipping")
                     return
 
-        jsonResponse = response.json()
+            try:
+                jsonResponse = response.json()
+            except ValueError:
+                logger.error("No JSON object could be decoded: %s", response.content)
+                return
 
         # Check for errors.
         if isinstance(jsonResponse, dict):
@@ -305,16 +331,19 @@ class HTTPClient(object):
         url = self._get_private_api_urlpath(endpoint)
         jsonResponse = self._post(url, {})
         orders = []
-        result = jsonResponse.get("result")
-        if result and result.get("open"):
-            for oid, o_details in result.get('open').iteritems():
-                o_dict = {}
-                o_dict["id"] = oid
-                o_dict["type"] = o_details["descr"]["type"]
-                o_dict["price"] = o_details["descr"]["price"]  # limit price
-                o_dict["amount"] = o_details["vol"]
-                o_dict["datetime"] = o_details["opentm"]
-                orders.append(Order(o_dict))
+        if jsonResponse:
+            result = jsonResponse.get("result")
+            if result and result.get("open"):
+                for oid, o_details in result.get('open').iteritems():
+                    o_dict = {}
+                    o_dict["id"] = oid
+                    o_dict["type"] = o_details["descr"]["type"]
+                    o_dict["price"] = o_details["descr"]["price"]  # limit price
+                    o_dict["amount"] = o_details["vol"]
+                    o_dict["datetime"] = o_details["opentm"]
+                    orders.append(Order(o_dict))
+        else:
+            logger.error("getOpenOrders haven't returned valid response")
         return orders
 # sample output
 # {u'result':
@@ -355,34 +384,47 @@ class HTTPClient(object):
     #         raise Exception("Failed to cancel order")
     #
     #
-    # def buyLimit(self, limitPrice, quantity):
-    #     url = "https://www.bitstamp.net/api/buy/"
-    #
-    #     # Rounding price to avoid 'Ensure that there are no more than 2 decimal places'
-    #     # error.
-    #     price = round(limitPrice, 2)
-    #     # Rounding amount to avoid 'Ensure that there are no more than 8 decimal places'
-    #     # error.
-    #     amount = round(quantity, 8)
-    #
-    #     params = {"price": price, "amount": amount}
-    #     jsonResponse = self._post(url, params)
-    #     return Order(jsonResponse)
-    #
-    #
-    # def sellLimit(self, limitPrice, quantity):
-    #     url = "https://www.bitstamp.net/api/sell/"
-    #
-    #     # Rounding price to avoid 'Ensure that there are no more than 2 decimal places'
-    #     # error.
-    #     price = round(limitPrice, 2)
-    #     # Rounding amount to avoid 'Ensure that there are no more than 8 decimal places'
-    #     # error.
-    #     amount = round(quantity, 8)
-    #
-    #     params = {"price": price, "amount": amount}
-    #     jsonResponse = self._post(url, params)
-    #     return Order(jsonResponse)
+    def buyLimit(self, limitPrice, quantity):
+        logger.info("buyLimit")
+        endpoint = "AddOrder"
+        url = self._get_private_api_urlpath(endpoint)
+        # Rounding price to avoid 'Ensure that there are no more than 2 decimal places'
+        # error.
+        # price = round(limitPrice, 2)
+        # Rounding amount to avoid 'Ensure that there are no more than 8 decimal places'
+        # error.
+        # amount = round(quantity, 8)
+        nonce = self._getNonce()
+        params_krakenex = {"nonce": nonce, "pair": 'XXBTZEUR', "type": "buy", "ordertype": "limit", "price": '2322.00',"volume": '0.002'}
+        params = {"pair": 'XXBTZEUR', "type": "buy", "ordertype": "limit", "price": '2322.00', "volume": '0.002'}
+
+        import krakenex
+        k = krakenex.API()
+        k.load_key('kraken.key')
+        # urlpath, data, conn, headers = k.query_private('AddOrder', params_krakenex)
+        # print urlpath, data, headers
+        # print k.query_private('AddOrder', params_krakenex)
+        urlpath, data, headers = self._post(url, params, nonce)
+        print urlpath, data, headers
+        pass
+        # if jsonResponse:
+        #     return Order(jsonResponse)
+
+
+
+    def sellLimit(self, limitPrice, quantity):
+        url = "https://www.bitstamp.net/api/sell/"
+
+        # Rounding price to avoid 'Ensure that there are no more than 2 decimal places'
+        # error.
+        price = round(limitPrice, 2)
+        # Rounding amount to avoid 'Ensure that there are no more than 8 decimal places'
+        # error.
+        amount = round(quantity, 8)
+
+        params = {"price": price, "amount": amount}
+        jsonResponse = self._post(url, params)
+        return Order(jsonResponse)
 
     # def getOrdersInfo(self, txidsArr):
     #     logger.info("getOrdersInfo")
@@ -404,6 +446,8 @@ class HTTPClient(object):
             for txid, trade_info in result['trades'].iteritems():
                 trade_info.update(id=txid)
                 user_transactions.append(UserTransaction(trade_info))
+        else:
+            logger.error("getUserTransactions haven't returned valid response")
         return user_transactions
 
 
@@ -423,6 +467,8 @@ class HTTPClient(object):
                 # TODO: not 100% sure if only market orders should be processed or all of them
                 trade = Trade(price=float(trade_arr[0]), amount=float(trade_arr[1]), dateTime=parse_datetime(trade_arr[2]), type=trade_arr[3])
                 last_trades.append(trade)
+        else:
+            logger.error("getLastTrades haven't returned valid response")
 
         return last_trades, last_trade_id
 
@@ -433,3 +479,34 @@ class HTTPClient(object):
         jsonResponse = self._post(url, {})
         if jsonResponse:
             result = jsonResponse.get("result")
+        else:
+            logger.error("getAssets haven't returned valid response")
+
+    def getOrderBookUpdates(self):
+        logger.info('getOrderBookUpdates')
+        endpoint = "Depth"
+        url = self._get_public_api_urlpath(endpoint)
+
+        bidPrices = []
+        bidVols = []
+        askPrices = []
+        askVols = []
+
+        jsonResponse = self._post(url, {'pair': common.traded_pair, 'count': 20})
+        if jsonResponse:
+            result = jsonResponse.get("result")
+            bids = result[common.traded_pair]['bids']
+            asks = result[common.traded_pair]['asks']
+
+            for bidArr in bids:
+                bidPrices.append(float(bidArr[0]))
+                bidVols.append(float(bidArr[1]))
+
+            for askArr in asks:
+                askPrices.append(float(askArr[0]))
+                askVols.append(float(askArr[1]))
+
+            return OrderBookUpdate(get_current_datetime(), bidPrices=bidPrices, bidVols=bidVols, askPrices=askPrices, askVols=askVols)
+
+        else:
+            logger.error("getOrderBookUpdates haven't returned valid response")

@@ -55,7 +55,7 @@ class TradeMonitor(threading.Thread):
         self.__queue = Queue.Queue()
         self.__stop = False
 
-    def _getNewTrades(self):
+    def _getUserTrades(self):
         userTrades = self.__httpClient.getUserTransactions()
 
         # Get the new trades only.
@@ -73,7 +73,7 @@ class TradeMonitor(threading.Thread):
         return self.__queue
 
     def start(self):
-        trades = self._getNewTrades()
+        trades = self._getUserTrades()
         # Store the last trade id since we'll start processing new ones only.
         if len(trades):
             self.__lastTradeId = trades[-1].getOrderingPropertyValue()
@@ -84,10 +84,10 @@ class TradeMonitor(threading.Thread):
     def run(self):
         while not self.__stop:
             try:
-                trades = self._getNewTrades()
+                trades = self._getUserTrades()
                 if len(trades):
                     self.__lastTradeId = trades[-1].getId()
-                    common.logger.info("%d new trade/s found" % (len(trades)))
+                    common.logger.info("%d new USER trade/s found" % (len(trades)))
                     self.__queue.put((TradeMonitor.ON_USER_TRADE, trades))
             except Exception, e:
                 common.logger.critical("Error retrieving user transactions", exc_info=e)
@@ -173,6 +173,7 @@ class LiveBroker(broker.Broker):
         self.__stop = True  # Stop running in case of errors.
         common.logger.info("Retrieving open orders.")
         openOrders = self.__httpClient.getOpenOrders()
+        #assets = self.__httpClient.getAssets()
         for openOrder in openOrders:
             self._registerOrder(build_order_from_open_order(openOrder, self.getInstrumentTraits(common.btc_symbol)))
 
@@ -279,11 +280,11 @@ class LiveBroker(broker.Broker):
             order.setGoodTillCanceled(True)
 
             if order.isBuy():
-                bitstampOrder = self.__httpClient.buyLimit(order.getLimitPrice(), order.getQuantity())
+                krakenOrder = self.__httpClient.buyLimit(order.getLimitPrice(), order.getQuantity())
             else:
-                bitstampOrder = self.__httpClient.sellLimit(order.getLimitPrice(), order.getQuantity())
+                krakenOrder = self.__httpClient.sellLimit(order.getLimitPrice(), order.getQuantity())
 
-            order.setSubmitted(bitstampOrder.getId(), bitstampOrder.getDateTime())
+            order.setSubmitted(krakenOrder.getId(), krakenOrder.getDateTime())
             self._registerOrder(order)
             # Switch from INITIAL -> SUBMITTED
             # IMPORTANT: Do not emit an event for this switch because when using the position interface

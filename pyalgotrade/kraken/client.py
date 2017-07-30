@@ -63,25 +63,44 @@ class ExchangeMonitor(threading.Thread):
     def getQueue(self):
         return self.__queue
 
-    def processNewTrades(self):
+    def processLastTrades(self):
         trades, self.__lastTradeId = self.__httpClient.getLastTrades(self.__lastTradeId)
 
         if len(trades):
-            common.logger.info("%d new trade/s found" % (len(trades)))
+            common.logger.info("%d new LAST trade/s found" % (len(trades)))
 
         for trade in trades:
             self.onTrade(trade)
 
+    def processOrderBookUpdates(self):
+        orderBookUpdate = self.__httpClient.getOrderBookUpdates()
+        if orderBookUpdate:
+            common.logger.info("Got order book update")
+            self.onOrderBookUpdate(orderBookUpdate)
+
+
+
     def start(self):
-        self.processNewTrades()
+        self.processLastTrades()
         super(ExchangeMonitor, self).start()
+
+    ######################################################################
+    # Bitstamp specific
 
     def onTrade(self, trade):
         self.__queue.put((ExchangeMonitor.ON_TRADE, trade))
 
+    # TODO:
+    # Get order book
+    # URL: https: // api.kraken.com / 0 / public / Depth
+    def onOrderBookUpdate(self, orderBookUpdate):
+        self.__queue.put((ExchangeMonitor.ON_ORDER_BOOK_UPDATE, orderBookUpdate))
+
+
     def run(self):
         while not self.__stop:
-            self.processNewTrades()
+            self.processLastTrades()
+            self.processOrderBookUpdates()
             sleep(ExchangeMonitor.POLL_FREQUENCY)
 
     def stop(self):

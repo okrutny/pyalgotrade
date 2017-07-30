@@ -20,15 +20,13 @@
 
 import Queue
 import datetime
-import time
 
-from kraken import httpclient
+from kraken import httpclient, common
 from pyalgotrade.kraken import client
 
 from pyalgotrade import barfeed
 from pyalgotrade import observer
 from pyalgotrade import bar
-from pyalgotrade.bitstamp import common
 
 
 class TradeBar(bar.Bar):
@@ -137,8 +135,6 @@ class LiveTradeFeed(barfeed.BaseBarFeed):
 
     def __initializeClient(self):
         self.__initializationOk = None
-        common.logger.info("Initializing websocket client.")
-
         try:
             # Start the thread that runs the client.
             self.__thread = self.buildExchangeMonitorClientThread()
@@ -146,7 +142,6 @@ class LiveTradeFeed(barfeed.BaseBarFeed):
             self.__initializationOk = True
         except Exception, e:
             self.__initializationOk = False
-            common.logger.error("Error connecting : %s" % str(e))
 
         if self.__initializationOk:
             common.logger.info("Initialization ok.")
@@ -225,10 +220,10 @@ class LiveTradeFeed(barfeed.BaseBarFeed):
         try:
             self.__stopped = True
             if self.__thread is not None and self.__thread.is_alive():
-                common.logger.info("Shutting down websocket client.")
+                common.logger.info("Shutting down ExchangeMonitor.")
                 self.__thread.stop()
         except Exception, e:
-            common.logger.error("Error shutting down client: %s" % (str(e)))
+            common.logger.error("Error shutting down ExchangeMonitor: %s" % (str(e)))
 
     # This should not raise.
     def join(self):
