@@ -173,7 +173,7 @@ class LiveBroker(broker.Broker):
         self.__stop = True  # Stop running in case of errors.
         common.logger.info("Retrieving open orders.")
         openOrders = self.__httpClient.getOpenOrders()
-        #assets = self.__httpClient.getAssets()
+        # assets = self.__httpClient.getAssets()
         for openOrder in openOrders:
             self._registerOrder(build_order_from_open_order(openOrder, self.getInstrumentTraits(common.btc_symbol)))
 

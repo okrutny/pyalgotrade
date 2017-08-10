@@ -35,10 +35,10 @@ class Connection:
         timeout -- blocking operations' timeout in seconds (default: 30)
         """
         self.headers = {
-            'User-Agent': 'krakenex/0.0.5 (+https://github.com/veox/python2-krakenex)'
+            'User-Agent': 'pyalgotrade'
         }
 
-        self.conn = httplib.HTTPSConnection(uri, timeout = timeout)
+        self.conn = httplib.HTTPSConnection(uri, timeout=timeout)
 
 
     def close(self):
@@ -64,4 +64,4 @@ class Connection:
         self.conn.request("POST", url, data, headers)
         response = self.conn.getresponse()
 
-        return response.read()
+        return response
